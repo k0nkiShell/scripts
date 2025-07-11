@@ -1,0 +1,168 @@
+#!/bin/bash
+
+# Home Assistant Settings
+url_base="http://XXX.XXX.XXX.XXX:8123/api/states"
+source /etc/ha.env
+token="${HA_TON}"  # Usar una variable de entorno o leer desde un archivo
+
+# Server name
+srv_name="qBittorrent"
+
+# Constantes para la informacion del dispositivo
+DEVICE_IDENTIFIERS='["chuwi_herobox_j4125"]'
+DEVICE_NAME="CHUWI Herobox J4125"
+DEVICE_MANUFACTURER="CHUWI"
+DEVICE_MODEL="Herobox J4125"
+
+# Verificar si las variables importantes están definidas
+if [ -z "$token" ] || [ -z "$url_base" ]; then
+  echo "Token o URL base no están definidos correctamente. Salida del script."
+  exit 1
+fi
+
+# Funcion para enviar datos a Home Assistant
+send_to_ha() {
+  local sensor_name=$1
+  local state_value=$2
+  local friendly_name=$3
+  local icon=$4
+  local unique_id=$5
+  local unit_of_measurement=$6
+
+  local url="${url_base}/${sensor_name}"
+  local device_info="{\"identifiers\":${DEVICE_IDENTIFIERS},\"name\":\"${DEVICE_NAME}\",\"manufacturer\":\"${DEVICE_MANUFACTURER}\",\"model\":\"${DEVICE_MODEL}\"}"
+  local payload="{\"state\":\"${state_value}\",\"attributes\": {\"friendly_name\":\"${friendly_name}\",\"icon\":\"${icon}\",\"state_class\":\"measurement\",\"unit_of_measurement\":\"${unit_of_measurement}\",\"device_class\":\"storage\",\"unique_id\":\"${unique_id}\"},\"device\":${device_info}}"
+
+  # Imprimir los datos (usado para pruebas)
+  # echo "URL: ${url}"
+  # echo "Payload:"
+  # echo "${payload}"
+
+  # Enviar la información a Home Assistant
+  curl --silent --fail -X POST -H "Authorization: Bearer ${token}" -H 'Content-type: application/json' --data "${payload}" "${url}"
+}
+
+# Definir los directorios a monitorizar
+directories=("/mnt/media1/" "/mnt/media2/" "/mnt/media3" "/mnt/media4")
+
+# Función para obtener la información del disco
+get_disk_info() {
+  df_output=$(df -h "$1" 2>/dev/null)
+  if [ $? -ne 0 ]; then
+    echo "Error al ejecutar df en $1"
+    return 1
+  fi
+  echo "$df_output" | awk 'NR==2 {print $1, $2, $3, $4, $5}'
+}
+
+convert_to_gb() {
+  local value_with_unit=$1
+  local num=$(echo "$value_with_unit" | sed 's/[A-Za-z]//g')
+  local unit=$(echo "$value_with_unit" | sed 's/[0-9.]//g')
+
+  case "$unit" in
+    T|TB) echo "$(awk "BEGIN {print $num * 1024}")" ;;
+    G|GB) echo "$num" ;;
+    M|MB) echo "$(awk "BEGIN {print $num / 1024}")" ;;
+    K|KB) echo "$(awk "BEGIN {print $num / 1048576}")" ;;
+    *) echo "0" ;;  # Valor inválido o desconocido
+  esac
+}
+
+convert_to_best_unit() {
+  local value_with_unit=$1
+  local num=$(echo "$value_with_unit" | grep -oP '^[0-9.]+')
+  local unit=$(echo "$value_with_unit" | grep -oP '[A-Za-z]+$' | tr '[:lower:]' '[:upper:]')
+
+  # Convertir a GB primero
+  case "$unit" in
+    T|TB) gb=$(echo "$num * 1024" | bc) ;;
+    G|GB) gb="$num" ;;
+    M|MB) gb=$(echo "$num / 1024" | bc -l) ;;
+    K|KB) gb=$(echo "$num / 1048576" | bc -l) ;;
+    *) gb="0" ;;
+  esac
+
+  # Decidir la mejor unidad
+  if (( $(echo "$gb >= 1000" | bc -l) )); then
+    tb=$(echo "scale=1; $gb / 1024" | bc)
+    echo "$tb TB"
+  elif (( $(echo "$gb < 1" | bc -l) )); then
+    mb=$(echo "$gb * 1024" | bc)
+    mb_int=$(printf "%.0f" "$mb")
+    echo "$mb_int MB"
+  else
+    gb_int=$(printf "%.0f" "$gb")
+    echo "$gb_int GB"
+  fi
+}
+
+
+# Bucle para recorrer los directorios
+for dir in "${directories[@]}"; do
+  disk_info=$(get_disk_info "$dir")
+  if [ $? -ne 0 ]; then
+    continue
+  fi
+
+  raw_size=$(echo ${disk_info} | awk '{print $2}')
+  raw_used=$(echo ${disk_info} | awk '{print $3}')
+  raw_avail=$(echo ${disk_info} | awk '{print $4}')
+  disk_use_percent=$(echo ${disk_info} | awk '{print $5}' | sed 's/%//g')
+
+  # Conversión automática a la mejor unidad
+  disk_size_unit=$(convert_to_best_unit "$raw_size")
+  disk_size=$(echo "$disk_size_unit" | awk '{print $1}')
+  disk_size_unit_only=$(echo "$disk_size_unit" | awk '{print $2}')
+
+  disk_used_unit=$(convert_to_best_unit "$raw_used")
+  disk_used=$(echo "$disk_used_unit" | awk '{print $1}')
+  disk_used_unit_only=$(echo "$disk_used_unit" | awk '{print $2}')
+
+  disk_avail_unit=$(convert_to_best_unit "$raw_avail")
+  disk_avail=$(echo "$disk_avail_unit" | awk '{print $1}')
+  disk_avail_unit_only=$(echo "$disk_avail_unit" | awk '{print $2}')
+
+  # Nombre dinámico del sensor
+  dir_name=$(basename "$dir")
+
+  # Mostrar en consola
+  echo ""
+  echo "========== DISCO: $dir =========="
+  echo "Tamaño:    $disk_size $disk_size_unit_only"
+  echo "Usado:     $disk_used $disk_used_unit_only"
+  echo "Disponible:$disk_avail $disk_avail_unit_only"
+  echo "Uso %:     $disk_use_percent %"
+  echo "=================================="
+  echo ""
+
+  # Enviar datos a Home Assistant
+  send_to_ha "sensor.${srv_name}_${dir_name}_size" "$disk_size" "${dir_name^} Size" "mdi:harddisk" "${srv_name}_${dir_name}_size" "$disk_size_unit_only"
+  send_to_ha "sensor.${srv_name}_${dir_name}_used" "$disk_used" "${dir_name^} Used" "mdi:harddisk" "${srv_name}_${dir_name}_used" "$disk_used_unit_only"
+  send_to_ha "sensor.${srv_name}_${dir_name}_avail" "$disk_avail" "${dir_name^} Available" "mdi:harddisk" "${srv_name}_${dir_name}_avail" "$disk_avail_unit_only"
+  send_to_ha "sensor.${srv_name}_${dir_name}_use_percent" "$disk_use_percent" "${dir_name^} Usage" "mdi:harddisk" "${srv_name}_${dir_name}_use_percent" "%"
+done
+
+# Obtener el tiempo que lleva el servidor levantado (uptime)
+uptime_seconds=$(cat /proc/uptime | awk '{print int($1)}')
+uptime_days=$((uptime_seconds / 86400))
+uptime_hours=$(((uptime_seconds % 86400) / 3600))
+uptime_minutes=$(((uptime_seconds % 3600) / 60))
+uptime_seconds_remain=$((uptime_seconds % 60))
+
+# Formatear el tiempo de actividad
+uptime_formatted=""
+[ $uptime_days -gt 0 ] && uptime_formatted="${uptime_days}d "
+[ $uptime_hours -gt 0 ] && uptime_formatted="${uptime_formatted}${uptime_hours}h "
+[ $uptime_minutes -gt 0 ] && uptime_formatted="${uptime_formatted}${uptime_minutes}m "
+uptime_formatted="${uptime_formatted}${uptime_seconds_remain}s"
+
+# Enviar tiempo de actividad a Home Assistant
+send_to_ha "sensor.${srv_name}_uptime" "$uptime_formatted" "Server Uptime" "mdi:clock" "${srv_name}_uptime" "time"
+
+# Obtener el uso de CPU
+cpu_usage=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+cpu_usage=$(printf "%.2f" $cpu_usage)
+
+# Enviar uso de CPU a Home Assistant
+send_to_ha "sensor.${srv_name}_cpu_usage" "${cpu_usage}" "CPU Usage" "mdi:cpu-64-bit" "${srv_name}_cpu_usage" "%"
