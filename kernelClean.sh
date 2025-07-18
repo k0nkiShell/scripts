@@ -25,19 +25,17 @@ CL="\033[m"
 
 # Detect current kernel
 current_kernel=$(uname -r)
-
-echo -e "${GN}Kernel en Uso :${GN} ${current_kernel}${CL}"
-
 available_kernels=$(dpkg --list | grep 'kernel-.*-pve' | awk '{print $2}' | grep -v "$current_kernel" | sort -V)
 
 header_info
 
 if [ -z "$available_kernels" ]; then
   echo -e "${GN}No old kernels detected. Current kernel: ${current_kernel}${CL}"
-  exit 0
+ exit 0
 fi
 
 echo -e "${YW}Available kernels for removal:${CL}"
+echo -e "${GN}Current kernel: ${current_kernel}${CL}"
 echo "$available_kernels" | nl -w 2 -s '. '
 
 echo -e "\n${YW}Select kernels to remove (comma-separated, e.g., 1,2):${CL}"
