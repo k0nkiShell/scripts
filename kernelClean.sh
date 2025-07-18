@@ -3,6 +3,7 @@
 # Author: MickLesk
 # License: MIT
 # https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# bash -c "$(wget -qLO - https://raw.githubusercontent.com/k0nkiShell/scripts/refs/heads/main/kernelClean.sh)"
 
 function header_info {
   clear
