@@ -25,6 +25,9 @@ CL="\033[m"
 
 # Detect current kernel
 current_kernel=$(uname -r)
+
+echo -e "${GN}Kernel en Uso :${GN} ${current_kernel}${CL}"
+
 available_kernels=$(dpkg --list | grep 'kernel-.*-pve' | awk '{print $2}' | grep -v "$current_kernel" | sort -V)
 
 header_info
